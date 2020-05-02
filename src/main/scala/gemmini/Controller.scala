@@ -8,6 +8,7 @@ import chisel3.util._
 import freechips.rocketchip.config._
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tile._
+import freechips.rocketchip.rocket.{MStatus,PRV,PTBR}
 import GemminiISA._
 
 
@@ -196,14 +197,22 @@ class GemminiModule[T <: Data: Arithmetic]
     // val config_cmd_type = cmd.bits.rs1(1,0) // TODO magic numbers
 
     val funct = compressed_cmd.bits.inst.funct
+    val satp = compressed_cmd.bits.satp
+    val prv = compressed_cmd.bits.status.prv
 
     val is_flush = funct === FLUSH_CMD
+    val is_lock = funct === LOCK_CMD
+    val is_unlock = funct === UNLOCK_CMD
     /*
     val is_load = (funct === LOAD_CMD) || (funct === CONFIG_CMD && config_cmd_type === CONFIG_LOAD)
     val is_store = (funct === STORE_CMD) || (funct === CONFIG_CMD && config_cmd_type === CONFIG_STORE)
     val is_ex = (funct === COMPUTE_AND_FLIP_CMD || funct === COMPUTE_AND_STAY_CMD || funct === PRELOAD_CMD) ||
     (funct === CONFIG_CMD && config_cmd_type === CONFIG_EX)
     */
+    val locked = RegInit(false.B)
+    val reset_locked_satp = 0.U.asTypeOf(new PTBR)
+    val locked_satp = RegInit(reset_locked_satp)
+    val equal_satp = locked_satp.mode === satp.mode && locked_satp.asid === satp.asid && locked_satp.ppn === satp.ppn
 
     when (is_flush) {
       val skip = compressed_cmd.bits.rs1(0)
@@ -212,8 +221,21 @@ class GemminiModule[T <: Data: Arithmetic]
 
       compressed_cmd.ready := true.B // TODO should we wait for an acknowledgement from the TLB?
     }
-
-    .otherwise {
+    .elsewhen (is_lock) {
+      when (!locked || prv =/= 0.U) {
+        locked := true.B
+        locked_satp.mode := satp.mode
+        locked_satp.asid := satp.asid
+        locked_satp.ppn := satp.ppn
+      }
+    }
+    .elsewhen (is_unlock) {
+      when (locked || prv =/= 0.U) {
+        locked := false.B
+        locked_satp := reset_locked_satp
+      }
+    }
+    .elsewhen (!locked || equal_satp) {
       rob.io.alloc.valid := true.B
 
       when(rob.io.alloc.fire()) {
