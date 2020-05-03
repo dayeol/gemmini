@@ -214,6 +214,10 @@ class GemminiModule[T <: Data: Arithmetic]
     val locked_satp = RegInit(reset_locked_satp)
     val equal_satp = locked_satp.mode === satp.mode && locked_satp.asid === satp.asid && locked_satp.ppn === satp.ppn
 
+    dontTouch(locked)
+    dontTouch(locked_satp)
+    dontTouch(equal_satp)
+    
     when (is_flush) {
       val skip = compressed_cmd.bits.rs1(0)
       tlb.io.exp.flush_skip := skip
@@ -228,19 +232,25 @@ class GemminiModule[T <: Data: Arithmetic]
         locked_satp.asid := satp.asid
         locked_satp.ppn := satp.ppn
       }
+      compressed_cmd.ready := true.B
     }
     .elsewhen (is_unlock) {
       when (locked || prv =/= 0.U) {
         locked := false.B
         locked_satp := reset_locked_satp
       }
+      compressed_cmd.ready := true.B
     }
-    .elsewhen (!locked || equal_satp) {
+    .elsewhen (prv =/= 0.U || !locked || equal_satp) {
       rob.io.alloc.valid := true.B
 
       when(rob.io.alloc.fire()) {
         compressed_cmd.ready := true.B
       }
+    } 
+    .otherwise {
+      // consume command and do nothing
+      compressed_cmd.ready := true.B
     }
 
     /*
