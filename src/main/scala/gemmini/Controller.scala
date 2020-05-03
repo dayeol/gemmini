@@ -235,13 +235,15 @@ class GemminiModule[T <: Data: Arithmetic]
       compressed_cmd.ready := true.B
     }
     .elsewhen (is_unlock) {
-      when (locked || prv =/= 0.U) {
+      when ((locked && equal_satp) || prv =/= 0.U) {
         locked := false.B
         locked_satp := reset_locked_satp
+        tlb.io.exp.flush_skip := 1.U
+        tlb.io.exp.flush_retry := 0.U
       }
       compressed_cmd.ready := true.B
     }
-    .elsewhen (prv =/= 0.U || !locked || equal_satp) {
+    .elsewhen (!locked || equal_satp || prv =/= 0.U) {
       rob.io.alloc.valid := true.B
 
       when(rob.io.alloc.fire()) {
