@@ -70,14 +70,16 @@ class ScratchpadReadReq(val n: Int) extends Bundle {
   val fromDMA = Bool()
 }
 
-class ScratchpadReadResp(val w: Int) extends Bundle {
+class ScratchpadReadResp(val w: Int, val n: Int) extends Bundle { 
+  val addr = UInt(log2Ceil(n).W)
   val data = UInt(w.W)
   val fromDMA = Bool()
+  val clearOnRead = Bool()
 }
 
 class ScratchpadReadIO(val n: Int, val w: Int) extends Bundle {
   val req = Decoupled(new ScratchpadReadReq(n))
-  val resp = Flipped(Decoupled(new ScratchpadReadResp(w)))
+  val resp = Flipped(Decoupled(new ScratchpadReadResp(w, n)))
 }
 
 class ScratchpadWriteIO(val n: Int, val w: Int, val mask_len: Int) extends Bundle {
@@ -115,16 +117,23 @@ class ScratchpadBank(n: Int, w: Int, mem_pipeline: Int, aligned_to: Int) extends
   val fromDMA = io.read.req.bits.fromDMA
 
   // Make a queue which buffers the result of an SRAM read if it can't immediately be consumed
-  val q = Module(new Queue(new ScratchpadReadResp(w), 1, true, true))
+  val q = Module(new Queue(new ScratchpadReadResp(w, n), 1, true, true))
+  q.io.enq.bits.addr := RegNext(raddr)
   q.io.enq.valid := RegNext(ren)
   q.io.enq.bits.data := rdata
   q.io.enq.bits.fromDMA := RegNext(fromDMA)
+  q.io.enq.bits.clearOnRead := RegNext(fromDMA)
 
   val q_will_be_empty = (q.io.count +& q.io.enq.fire()) - q.io.deq.fire() === 0.U
   io.read.req.ready := q_will_be_empty
 
   // Build the rest of the resp pipeline
   val rdata_p = Pipeline(q.io.deq, mem_pipeline)
+
+  when (rdata_p.valid && rdata_p.bits.clearOnRead) {
+    mem.write(rdata_p.bits.addr, 0.U.asTypeOf(Vec(mask_len, mask_elem)))
+  }
+
   io.read.resp <> rdata_p
 }
 
